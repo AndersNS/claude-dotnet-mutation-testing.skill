@@ -1,201 +1,245 @@
 ---
 name: dotnet-mutation-testing
-description: Perform mutation testing on .NET/C# projects. Use when the user wants to test the quality of their test suite by applying code mutations and checking if tests catch them. Triggered by requests like "run mutation testing on this file", "check my test coverage with mutations", "mutate this code and run tests", or when discussing test effectiveness.
+description: Perform mutation testing on .NET/C# projects using Roslyn-based syntax tree analysis. Use when the user wants to test the quality of their test suite by applying code mutations and checking if tests catch them. Triggered by requests like "run mutation testing on this file", "check my test coverage with mutations", "mutate this code and run tests", or when discussing test effectiveness.
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep
 ---
 
 # .NET Mutation Testing
 
-Mutation testing evaluates test suite quality by introducing small code changes (mutations) and checking if tests catch them. This skill automates mutation testing for .NET C# projects.
+Mutation testing evaluates test suite quality by introducing small code changes (mutations) and checking if tests catch them. This skill uses a Roslyn-based C# tool for precise, syntax-aware mutations.
 
 ## Quick Start
 
 **Basic usage:**
+
 1. User provides a C# source file path and test project path
-2. Claude applies mutations systematically
-3. Claude runs tests after each mutation
-4. Claude generates a report showing which mutations survived
+2. Build and run the mutation testing tool: `dotnet run --project src/MutationTesting -- <source-file> <test-project> [-v]`
+3. Tool discovers mutations using Roslyn syntax trees
+4. Tool runs tests after each mutation
+5. Tool generates a detailed report showing which mutations survived
 
 **Example user request:**
-> "Run mutation testing on `Calculator.cs` using tests in `CalculatorTests.csproj`"
 
-## Workflow
+> "Run mutation testing on `Calculator.cs` using tests in `CalculatorTests/CalculatorTests.csproj`"
 
-### Step 1: Identify Mutations
+## How It Works
 
-Use `scripts/mutate_csharp.py` to analyze the source file and find all possible mutations:
+The tool is built entirely in C# using Roslyn (the C# compiler platform) for accurate, syntax-aware mutation generation.
 
-```python
-from scripts.mutate_csharp import mutate_file
+### Running Mutation Testing
 
-# Find all mutations
-original_code, mutations = mutate_file("path/to/file.cs")
-print(f"Found {len(mutations)} possible mutations")
+```bash
+dotnet run --project src/MutationTesting -- <source-file> <test-project> [options]
+
+# Example:
+dotnet run --project src/MutationTesting -- ~/MyProject/Calculator.cs ~/MyProject/Tests/CalculatorTests.csproj -v
+
+# Options:
+#   -v, --verbose        Show detailed progress and output
+#   -o, --output <file>  Custom report output path
+#   -h, --help           Show help message
 ```
 
-Each mutation includes:
-- Line number
-- Original code
-- Mutated code
-- Mutation type (ARITHMETIC, COMPARISON, LOGICAL, BOOLEAN, UNARY)
-- Description
+Note: `dotnet run` will automatically build the project if needed, so no explicit build step is required.
 
-### Step 2: Apply Each Mutation and Test
+### Architecture
 
-For each mutation:
+**Core Components:**
 
-1. **Backup original file** - Keep original content in memory
-2. **Apply mutation** - Use `mutate_file()` with mutation index
-3. **Write mutated code** - Overwrite source file with mutated version
-4. **Run tests** - Execute tests using `scripts/run_tests.py`
-5. **Restore original** - Write original content back to file
-6. **Record results** - Track whether mutation was killed or survived
+1. **MutationEngine** (`Core/MutationEngine.cs`)
+   - Discovers all mutations using Roslyn syntax trees
+   - Applies mutations to code
+   - Validates mutated code compiles
 
-```python
-from scripts.mutate_csharp import mutate_file
-from scripts.run_tests import run_tests
+2. **Mutators** (`Mutations/` directory)
+   - Each mutator implements specific mutation logic
+   - Uses `CSharpSyntaxRewriter` to visit and transform syntax nodes
+   - **Basic Mutators:**
+     - `ArithmeticMutator`: +, -, \*, /, %
+     - `ComparisonMutator`: ==, !=, <, >, <=, >=
+     - `LogicalMutator`: &&, ||
+     - `BooleanLiteralMutator`: true <-> false
+   - **Advanced Mutators:**
+     - `LiteralMutator`: Numeric constants (0→1, n→n±1), strings
+     - `StatementMutator`: Return values, ++/--, remove method calls
+     - `MethodCallMutator`: LINQ methods (First/Last, Any/All, Min/Max, etc.)
+     - `AssignmentMutator`: +=, -=, \*=, /=
 
-# Read original
-with open(source_file, 'r') as f:
-    original_code = f.read()
+3. **MutationOrchestrator** (`Core/MutationOrchestrator.cs`)
+   - Coordinates the workflow
+   - Runs baseline tests
+   - Applies each mutation and tests
+   - Restores original code after each test
 
-# Apply mutation
-mutated_code, mutations = mutate_file(source_file, mutation_index=i)
+4. **DotNetTestRunner** (`TestRunner/DotNetTestRunner.cs`)
+   - Executes `dotnet test` via process
+   - Parses test results
+   - Handles timeouts
 
-# Write mutated version
-with open(source_file, 'w') as f:
-    f.write(mutated_code)
+5. **ReportGenerator** (`Core/ReportGenerator.cs`)
+   - Generates detailed text reports
+   - Highlights survived mutations (test gaps)
+   - Shows mutation score
 
-# Run tests
-results = run_tests(test_project_path)
+### Workflow Detail
 
-# Restore original
-with open(source_file, 'w') as f:
-    f.write(original_code)
+1. **Discovery Phase**
+   - Parse C# source file into Roslyn SyntaxTree
+   - Each mutator visits the tree and identifies mutation opportunities
+   - Generate `MutationResult` objects with location, original/mutated code
 
-# Check if mutation was killed
-mutation_killed = not results['passed']
+2. **Baseline Validation**
+   - Run tests with original code
+   - Fail fast if tests don't pass initially
+
+3. **Mutation Testing Loop**
+   - For each mutation:
+     - Apply mutation to syntax tree
+     - Write mutated code to source file
+     - Run tests via `dotnet test`
+     - Record: KILLED (tests failed) or SURVIVED (tests passed)
+     - Restore original code
+
+4. **Report Generation**
+   - Calculate mutation score: `killed / (total - errors) * 100`
+   - List survived mutations (test gaps) with full detail
+   - Summarize killed mutations by type
+
+## Example Report Output
+
 ```
-
-### Step 3: Generate Report
-
-Create a text report file containing:
-
-1. **Summary Section**
-   - Total mutations tested
-   - Mutations killed (tests caught the change)
-   - Mutations survived (tests still passed)
-   - Mutation score percentage
-
-2. **Survived Mutations** (most important)
-   - Line number and description
-   - Original vs mutated code
-   - Why this indicates a test gap
-
-3. **Killed Mutations** (optional detail)
-   - Brief list for completeness
-
-**Report format example:**
-
-```
+================================================================================
 MUTATION TESTING REPORT
-=======================
-File: Calculator.cs
+================================================================================
+
+Source File: Calculator.cs
 Test Project: CalculatorTests.csproj
-Date: 2025-10-29
+Generated: 2025-10-29 14:32:15
+Duration: 12.3 seconds
 
+================================================================================
 SUMMARY
--------
-Total Mutations: 10
-Killed: 8 (80.0%)
-Survived: 2 (20.0%)
+================================================================================
 
-Mutation Score: 80.0%
+Total Mutations:     15
+Killed Mutations:    12 (80.0%)
+Survived Mutations:  3 (20.0%)
+Error Mutations:     0
 
-SURVIVED MUTATIONS (Test Gaps)
--------------------------------
-[1] Line 15: Replace - with + on line 15
-    Original: return a - b;
-    Mutated:  return a + b;
-    → Tests did not catch this change in the Subtract method
+MUTATION SCORE: 80.0%
 
-[2] Line 28: Replace == with != on line 28
-    Original: return value == 0;
-    Mutated:  return value != 0;
-    → Tests did not verify the equality check
+================================================================================
+SURVIVED MUTATIONS (Not caught by tests - potential issues!)
+================================================================================
 
-KILLED MUTATIONS
-----------------
-✓ Line 9: Replace + with - (caught by tests)
-✓ Line 19: Replace > with < (caught by tests)
-...
+1. Replace + with -
+   Location: Calculator.cs:15:20
+   Original: a + b
+   Mutated:  a - b
+   Type:     ARITHMETIC
+
+2. Replace 0 with 1
+   Location: Calculator.cs:28:24
+   Original: 0
+   Mutated:  1
+   Type:     LITERAL
+
+3. Replace First() with Last()
+   Location: Calculator.cs:42:15
+   Original: First()
+   Mutated:  Last()
+   Type:     METHOD_CALL
+
+================================================================================
+KILLED MUTATIONS (Caught by tests - 12 mutations)
+================================================================================
+
+ARITHMETIC: 5 mutations
+COMPARISON: 4 mutations
+LOGICAL: 2 mutations
+BOOLEAN: 1 mutations
+
+================================================================================
 ```
 
-## Implementation Notes
+## Key Features
 
-### Error Handling
+**Syntax-Aware Mutations:**
 
-- Verify source file exists before starting
-- Verify test project exists and is valid
-- Ensure dotnet CLI is available
-- Handle test timeout (60 seconds per run)
-- Always restore original file, even if errors occur
+- Won't mutate operators inside strings or comments
+- Understands C# semantics via Roslyn
+- Type-safe transformations
 
-### Performance Considerations
+**Rich Mutation Types:**
 
-- Mutation testing can be slow (N mutations × test execution time)
-- Inform user of progress regularly
-- Consider showing progress: "Testing mutation 3 of 15..."
+- Numeric literals (0→1, boundary values)
+- String literals (""→"mutated")
+- LINQ method calls (First/Last, Any/All, etc.)
+- Assignment operators (+=, -=, etc.)
+- Return statement values
 
-### File Safety
+**Performance:**
 
-Always use this pattern to ensure file restoration:
-```python
-try:
-    with open(source_file, 'r') as f:
-        original_code = f.read()
-    
-    # Apply mutation and test
-    # ...
-    
-finally:
-    # Always restore
-    with open(source_file, 'w') as f:
-        f.write(original_code)
-```
+- In-memory syntax tree operations
+- Validates mutations compile before testing
+- Fast mutation discovery and application
+
+## Usage from Claude Code
+
+When user requests mutation testing:
+
+1. **Validate inputs:**
+
+   ```bash
+   # Check file exists
+   ls <source-file>
+   # Check test project exists
+   ls <test-project>
+   ```
+
+2. **Run mutation testing:**
+
+   ```bash
+   dotnet run --project src/MutationTesting -- <source-file> <test-project> -v
+   ```
+
+   Note: `dotnet run` automatically builds if needed, so no separate build step is required.
+
+3. **Read and display report:**
+
+   ```bash
+   cat mutation_report_*.txt
+   ```
+
+4. **Interpret results for user:**
+   - Explain what survived mutations mean
+   - Suggest test improvements
+   - Highlight critical test gaps
 
 ## Supported Mutations
 
-See [references/csharp_mutations.md](references/csharp_mutations.md) for complete list of mutation patterns including:
+**Basic Operators:**
 
-- Arithmetic operators (+, -, *, /, %)
-- Comparison operators (==, !=, <, >, <=, >=)
-- Logical operators (&&, ||)
-- Boolean literals (true, false)
-- Unary operators (++, --)
+- Arithmetic: +, -, \*, /, %
+- Comparison: ==, !=, <, >, <=, >=
+- Logical: &&, ||
+- Boolean: true ↔ false
+- Unary: ++, --
 
-## Scripts
+**Advanced:**
 
-### mutate_csharp.py
+- Numeric literals: 0→1, n→n±1
+- String literals: ""→"mutated"
+- LINQ methods: First/Last, Any/All, Min/Max, Skip/Take, etc.
+- Assignment: +=, -=, \*=, /=
+- Return values: increment/decrement returned numbers
 
-Python module for finding and applying mutations to C# files.
+## Requirements
 
-**Key functions:**
-- `mutate_file(file_path, mutation_index=None)` - Find mutations or apply a specific one
-- Returns tuple: (code, mutations_list)
+- .NET 8 SDK or later
+- `dotnet` CLI available in PATH
+- Source file and test project must be in valid .NET project structure
 
-### run_tests.py
+## Implementation Notes
 
-Python module for executing dotnet tests and capturing results.
-
-**Key functions:**
-- `run_tests(test_project_path, verbose=False)` - Run tests and return results
-- Returns dict with: `passed`, `total`, `passed_count`, `failed_count`, `output`
-
-## Limitations
-
-- Only supports C# syntax
-- Requires dotnet CLI to be installed
-- Does not mutate comments or whitespace
-- Does not mutate method calls or return statements (yet)
-- Test timeout set to 60 seconds per mutation
+This skill uses a Roslyn-based C# solution for syntax-aware mutation testing with accurate code analysis and advanced mutation types.
