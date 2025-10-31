@@ -142,6 +142,9 @@ dotnet run -- ~/MyApp/Calculator.cs ~/MyApp.Tests/MyApp.Tests.csproj -o my_repor
 
 ## Example Report
 
+> [!NOTE]
+> Claude will genereta a summary of this report
+
 ```
 ================================================================================
 MUTATION TESTING REPORT

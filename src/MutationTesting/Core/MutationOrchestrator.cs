@@ -32,13 +32,17 @@ public class MutationOrchestrator(string testProjectPath, bool verbose = false)
 
         // Step 1: Discover mutations
         if (verbose)
+        {
             Console.WriteLine($"Discovering mutations in {Path.GetFileName(sourceFilePath)}...");
+        }
 
         var mutations = MutationEngine.DiscoverMutations(originalCode, sourceFilePath);
         report.Mutations.AddRange(mutations);
 
         if (verbose)
+        {
             Console.WriteLine($"Found {mutations.Count} possible mutations\n");
+        }
 
         if (mutations.Count == 0)
         {
@@ -50,7 +54,9 @@ public class MutationOrchestrator(string testProjectPath, bool verbose = false)
 
         // Step 2: Run baseline tests
         if (verbose)
+        {
             Console.WriteLine("Running baseline tests with original code...");
+        }
 
         var (baselinePassed, baselineOutput, baselineResults) = _testRunner.RunTests(verbose);
 
@@ -60,7 +66,9 @@ public class MutationOrchestrator(string testProjectPath, bool verbose = false)
         }
 
         if (verbose)
+        {
             Console.WriteLine($"✓ Baseline tests passed ({baselineResults.Passed} tests)\n");
+        }
 
         // Step 3: Test each mutation
         for (var i = 0; i < mutations.Count; i++)
